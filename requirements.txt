@@ -1,0 +1,14 @@
+ultralytics==8.0.196
+opencv-python
+matplotlib
+seaborn
+scikit-image
+numpy
+pandas
+PyYAML
+Pillow
+tqdm
+requests
+
+torchvision
+einops
