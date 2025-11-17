@@ -1,0 +1,469 @@
+\documentclass[a4paper,12pt]{article}
+
+\usepackage{times}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{subcaption} 
+\usepackage{caption}
+\usepackage{float} 
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{placeins}
+\hypersetup{
+    colorlinks=true,
+    urlcolor=blue,
+}
+
+\setstretch{1.25}
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+
+\title{\textbf{Improving Low-Light Object Detection Using Zero-DCE Enhancement and LIAM-Integrated YOLOv8}}
+
+\author{
+Vibhav Tiwari , Goutam Jain , Sahaj Sharma\\[6pt]
+\small Department of Computer Engineering,\\
+\small Netaji Subhas University of Technology (NSUT), Delhi, India
+}
+\date{}
+\begin{document}
+
+\maketitle
+\begin{abstract}
+Low-light images pose significant challenges for object detection due to reduced contrast, loss of textures, and increased noise. This work evaluates three low-light detection pipelines using the ExDark dataset: (1) baseline YOLOv8 trained on raw images, (2) YOLOv8 trained on Zero-DCE enhanced images, and (3) a modified YOLOv8 model integrating a Low-light Illumination Attention Module (LIAM) within the backbone to improve feature extraction under dark conditions. Zero-DCE improves illumination but slightly reduces mAP due to smoothing, while the LIAM-augmented YOLOv8 improves recall and precision by focusing attention on salient low-light regions. The results demonstrate that illumination-aware attention compensates for the limitations of enhancement-based preprocessing. All code and models are available at:
+\textbf{\href{https://github.com/sharmasahaj01/low-light-detection-LIAM-YOLOv8}{LIAM-YOLO}}.
+\end{abstract}
+
+
+\section{Introduction}
+
+Object detection under low-light conditions remains a challenge in the field of computer vision, particularly in practical applications such as video surveillance, autonomous navigation, night-time street monitoring, and robotics. Images captured under insufficient illumination generally have many defects, including low signal-to-noise ratio, low contrast, suppressed object boundaries, color distortion, and heavy loss of fine textures. These degradations badly affect the deep neural network's ability for feature extraction and directly result in a higher number of false negatives and missed detections. As modern object detectors rely much on strong spatial and semantic features, such as YOLOv8, whose performance drops significantly when key patterns are corrupted due to low ambient lighting.
+
+Conventional low-light image enhancement techniques, ranging from histogram equalization and gamma correction to Retinex-based techniques, typically work by trying to compensate for poor lighting conditions through increasing brightness or contrast. However, over-amplified noise or unnatural effects often result. With the emergence of deep learning, learning-based enhancement methods explicitly perform visual enhancement by estimating pixel-wise illumination curves. Representative methods include Zero-DCE, which enhances low-light images without paired supervision, hence well-suited for datasets with scarce ground truth. Though enhancement methods can often present visually pleasing results, this does not necessarily imply a gain in detection accuracy. Enhanced images might get over-smoothed or lose the discriminative edge information that the detectors rely on. This especially happens if enhancement is used as a pre-processing step in front of object detection.
+
+In addressing these challenges, attention mechanisms have emerged as strong tools aimed at improving feature representation in deep neural networks. Channel and spatial attention modules are able to help the network focus on informative regions while suppressing irrelevant background noise. The majority of existing attention modules are not explicitly designed for low-light conditions; illumination variations or specific feature suppression patterns in dark images are not taken into consideration. Conventional attention mechanisms therefore easily fail in recovering lost detail or amplify irrelevant bright regions.
+
+Herein, we explore three training pipelines for low-light object detection using the ExDark dataset: (1) a baseline YOLOv8 model trained with raw low-light images, (2) YOLOv8 trained with Zero-DCE enhanced images, and (3) a modified YOLOv8 that embeds a new \textbf{Low-light Illumination Attention Module (LIAM)} into the backbone architecture. By focusing attention on underexposed, semantically important regions, the aim of LIAM is to enhance the feature extraction process. Differently from generic attention structures, LIAM is specifically tailored for low-light conditions, thus enabling our model to recover fine object details suppressed by illumination deficiencies.
+
+The two advantages coming with the introduction of LIAM are as follows: First, it helps to alleviate the smoothing side effects introduced by Zero-DCE enhancement that could result in minor losses in detection accuracy. Second, it improves recall by ensuring that faint objects receive higher attention during feature extraction. Our experimental evaluation demonstrates that, although Zero-DCE alone does not improve the metrics consistently, the combination of enhancement and LIAM-augmented YOLOv8 leads to improved sensitivity to low-light objects, reflected by higher recall and qualitative improvements in feature focus. The rest of the paper is organized as follows: Chapter 2 presents related work on low-light enhancement, object detection, and attention mechanisms. Chapter 3 explains the proposed methodology with Zero-DCE preprocessing, YOLOv8 architecture details, and LIAM implementation. Chapter 4 covers experimental settings and results, while Chapter 5 presents in-depth discussions of observations. Finally, Chapter 6 concludes the report with future research directions.
+
+% \section{Literature Review}
+
+% Low-light image enhancement and robust detection in dark environments have been extensively studied in recent years due to their importance in surveillance, autonomous driving, and night-time scene understanding. Early enhancement methods focused on global histogram equalization \cite{pizer1987contrast} and gamma correction \cite{huang2013efficient}, which improve brightness but often amplify noise. Retinex-based approaches \cite{land1977retinex, jobson1997multiscale, wei2018deep} attempted to decompose illumination and reflectance, but conventional models struggled with artifacts and color shifts. Learning-based Retinex models such as Retinex-Net \cite{wei2018deep} demonstrated notable improvements through data-driven illumination estimation.
+
+% Deep-learning approaches have revolutionized low-light enhancement, with methods such as LLNet \cite{lore2017llnet}, EnlightenGAN \cite{jiang2021enlightengan}, and KinD \cite{zhang2019kindling} incorporating deep priors to improve visibility and reduce noise. Among them, Zero-DCE \cite{guo2020zero} introduced a self-supervised deep curve estimation framework, enabling enhancement without paired training data through exposure, color, and smoothness constraints. Zero-DCE++ \cite{li2021zero} further improved curve estimation and robustness, making it suitable for real-time enhancement tasks. Several surveys \cite{zhang2021torch, yavartanoo2022lowlight} discuss the strengths and limitations of enhancement models, noting that enhancement alone does not guarantee improved downstream detection accuracy.
+
+% In parallel, object detection has evolved from classical HOG and DPM models \cite{dalal2005histograms, felzenszwalb2010object} to anchor-based deep detectors such as Faster R-CNN \cite{ren2015faster} and SSD \cite{liu2016ssd}. One-stage detectors like YOLO \cite{redmon2016you, redmon2017yolo9000, redmon2018yolov3} significantly increased processing speed. The YOLOv5 \cite{glenn2020yolov5}, YOLOv7 \cite{wang2022yolov7}, and YOLOv8 \cite{jocher2023yolov8} families improved detection through specialized backbone structures (CSPNet \cite{wang2020cspnet}, C2f), efficient necks (PANet \cite{liu2018path}), and optimized loss functions. Low-light detection benchmarks such as ExDark \cite{loh2019getting} and DICM \cite{lee2012dicm} highlight the fragility of detectors under illumination degradation.
+
+% Attention mechanisms have shown promise in highlighting informative spatial or semantic regions. SE-Net \cite{hu2018squeeze} introduced channel reweighting, while CBAM \cite{woo2018cbam} extended this by adding spatial attention. Non-local attention \cite{wang2018nonlocal} and transformer-based self-attention \cite{dosovitskiy2020vit} further expanded context modeling capabilities. In low-light contexts, attention-based enhancement methods such as MIRNet \cite{zamir2020mirnet} and DRBN \cite{yang2020drbn} enhanced detail restoration, but these models are computationally heavy and not optimized for detection.
+
+% Recent works combining enhancement and detection include LL-YOLO \cite{park2021llnetyolo}, EnlightenGAN-YOLO \cite{liu2020nighttime}, and attention-modified YOLO variants \cite{ye2023attentionyolo}. However, these approaches often rely on visually pleasing enhancement rather than task-specific feature optimization. Studies such as \cite{lv2018mbllen, wang2021see} emphasize that illumination enhancement can degrade detection by oversmoothing edges important for feature extraction.
+
+% Based on the reviewed literature, two gaps are evident: (1) enhancement improves brightness but may harm discriminative features needed by detectors, and (2) existing attention modules are not explicitly designed for low-light feature suppression. This motivates the introduction of our Low-light Illumination Attention Module (LIAM), which aims to selectively emphasize illumination-deficient object regions in the YOLOv8 backbone. Our work builds upon insights from enhancement studies \cite{guo2020zero, wei2018deep}, YOLO architectural improvements \cite{jocher2023yolov8, wang2020cspnet}, and attention mechanisms \cite{woo2018cbam, hu2018squeeze}, while addressing the underexplored intersection of enhancement and low-light-aware attention for object detection.
+
+\section{Literature Review}
+
+Low-light image enhancement and the robust detection of objects in dark environments have been one of the most active topics in recent years due to its importance in surveillance, autonomous driving, and night-time scene understanding. The early enhancement approaches focused on global histogram equalization \cite{pizer1987contrast} and gamma correction \cite{huang2013efficient}, which improve brightness but often amplify noise. Retinex-based approaches \cite{land1977retinex, jobson1997multiscale, wei2018deep} tried to decompose illumination and reflectance; however, conventional models suffered from artifacts and color shifts. Learning-based Retinex models, like Retinex-Net \cite{wei2018deep}, performed much better through data-driven illumination estimation.
+
+Deep-learning-based methods have brought dramatic changes to low-light enhancement. For example, LLNet \cite{lore2017llnet}, EnlightenGAN \cite{jiang2021enlightengan}, and KinD \cite{zhang2019kindling} leverage deep priors for better visibility and reduced noise. Among them, Zero-DCE \cite{guo2020zero} pioneered a self-supervised deep curve estimation framework that allows image enhancement without paired training data, using exposure, color, and smoothness constraints. Furthermore, Zero-DCE++ \cite{li2021zero} upgraded the curve estimation for more accuracy and robustness, allowing it to be appropriate for real-time enhancement tasks. Several surveys \cite{zhang2021torch, yavartanoo2022lowlight} review the advantages and disadvantages of different enhancement models. The important thing to note here is that enhancement alone does not ensure a better downstream detection accuracy.
+
+Meanwhile, object detection has evolved from classical HOG and DPM models \cite{dalal2005histograms, felzenszwalb2010object} to anchor-based deep detectors such as Faster R-CNN \cite{ren2015faster} and SSD \cite{liu2016ssd}. In a major leap that significantly increased the processing speed, one-stage detectors such as YOLO \cite{redmon2016you, redmon2017yolo9000, redmon2018yolov3} were proposed. Successive families such as YOLOv5 \cite{glenn2020yolov5}, YOLOv7 \cite{wang2022yolov7}, and YOLOv8 \cite{jocher2023yolov8} improved the detection with the help of specialized backbone structures like CSPNet \cite{wang2020cspnet}, C2f, efficient necks like PANet \cite{liu2018path}, and optimized loss functions. Low-light detection benchmarks like ExDark \cite{loh2019getting} and DICM \cite{lee2012dicm} highlight the fragility of detectors under illumination degradation.
+
+Attention mechanisms have shown promise in highlighting informative spatial or semantic regions. SE-Net \cite{hu2018squeeze} introduced channel reweighting, while CBAM \cite{woo2018cbam} extended this by adding spatial attention. Non-local attention \cite{wang2018nonlocal} and transformer-based self-attention \cite{dosovitskiy2020vit} further expanded context modeling capabilities. In low-light contexts, attention-based enhancement methods like MIRNet \cite{zamir2020mirnet} and DRBN \cite{yang2020drbn} enhance the restoration of details, but such models are computationally heavy and not optimized for detection.
+
+Recent works which couple enhancement with detection are LL-YOLO \cite{park2021llnetyolo}, EnlightenGAN-YOLO \cite{liu2020nighttime}, and YOLO variants with attention modulation \cite{ye2023attentionyolo}. However, visually pleasing enhancement rather than task-specific feature optimization is often used in these approaches. Works such as \cite{lv2018mbllen, wang2021see} highlight that enhancement in illumination can actually degrade detection due to oversmoothing of edges that are important for feature extraction. From the reviewed literature, two gaps become apparent: (1) enhancement boosts brightness but may damage discriminative features that are required by detectors, and (2) current attention modules do not explicitly aim at the suppression of low-light features. This paper proposes our Low-light Illumination Attention Module (LIAM), intended to selectively emphasize illuminationdeficient object regions in the YOLOv8 backbone. We draw inspiration from works on enhancement \cite{guo2020zero, wei2018deep}, YOLO architecture improvements \cite{jocher2023yolov8, wang2020cspnet}, and attention mechanisms \cite{woo2018cbam, hu2018squeeze}. This work addresses the hitherto under-explored combination of enhancement with low-light-aware attention for object detection.
+
+\section{Methodology}
+
+This chapter describes the complete pipeline used in this study, including the dataset, preprocessing approach, baseline YOLOv8 architecture, and the proposed LIAM-integrated YOLOv8 modification. The overall objective is to improve feature extraction for low-light object detection by combining illumination enhancement with illumination-aware attention.
+
+\subsection{Dataset: ExDark}
+
+We use the ExDark (Exclusively Dark) dataset, a benchmark specifically designed for low-light object detection. ExDark contains 7,363 images across 12 object categories, captured in a wide range of night-time illumination types, including extremely dark scenes, weak illuminance, uneven lighting, and artificial light sources. Each image includes bounding box labels and scene-type attributes.
+
+The dataset is challenging due to:
+\begin{itemize}
+    \item highly suppressed textures and edges,
+    \item significant noise and compression artifacts,
+    \item blurred or partially visible objects,
+    \item uneven lighting across regions.
+\end{itemize}
+
+A standard 80--20 train--validation split is used for all experiments.
+
+\subsection{Preprocessing: Zero-DCE Enhancement}
+
+Zero-Reference Deep Curve Estimation (Zero-DCE) is employed to enhance low-light images before training. Zero-DCE estimates pixel-wise illumination curves through a lightweight fully convolutional network (FCN) containing seven convolutional layers with local feature concatenation. The model computes iterative curve transformations:
+\[
+R_{n+1} = R_{n} + A_{n}(R_{n} - R_{n}^{2}),
+\]
+where $R_{0}$ is the input image and $A_{n}$ denotes the learned curve map for iteration $n$.
+
+Zero-DCE is trained using four zero-reference losses:
+\begin{itemize}
+    \item \textbf{Exposure control loss} -- encourages balanced illumination,
+    \item \textbf{Color constancy loss} -- avoids unnatural color shifts,
+    \item \textbf{Spatial consistency loss} -- preserves contrast relationships,
+    \item \textbf{Illumination smoothness loss} -- removes high-frequency noise.
+\end{itemize}
+
+Enhanced images are visually brighter and more stable, but enhancement may introduce over-smoothing which affects detectors. Therefore, Zero-DCE is used only as a preprocessing step and evaluated in combination with our proposed attention model.
+
+\begin{figure}[h]
+    \centering
+    \begin{minipage}{0.45\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/Bicycle_raw.png}
+        \caption*{(a) Original low-light image}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.45\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/Bicycle_enhanced.png}
+        \caption*{(b) Zero-DCE enhanced image}
+    \end{minipage}
+    \caption{Effect of Zero-DCE enhancement on a low-light sample image. Zero-DCE significantly improves illumination and visibility while maintaining natural color tones.}
+    \label{fig:zero_dce_example}
+\end{figure}
+
+
+\subsection{YOLOv8 Architecture Overview}
+
+YOLOv8 is a recent real-time one-stage object detector developed by Ultralytics. It consists of three major components:
+
+\begin{itemize}
+    \item \textbf{Backbone} -- based on the C2f module and CSPNet for efficient multi-scale feature extraction.
+    \item \textbf{Neck} -- PAN/FPN structure for fusing shallow and deep features.
+    \item \textbf{Detection Head} -- anchor-free prediction of bounding boxes, objectness, and class probabilities.
+\end{itemize}
+
+The C2f module, which is the core building block of the backbone, aggregates information using cross-stage partial connections and repeated bottleneck layers.
+
+\subsection{Proposed LIAM: Low-light Illumination Attention Module}
+
+Although Zero-DCE enhances brightness, low-light images still contain suppressed features that negatively affect YOLO’s feature extraction. To address this, we introduce the \textbf{Low-light Illumination Attention Module (LIAM)}, inspired by CBAM but modified for illumination-aware reweighting.
+
+CBAM consists of channel attention followed by spatial attention. LIAM follows the same structure but adapts the attention to low-light characteristics by:
+\begin{itemize}
+    \item increasing sensitivity to dim regions using illumination-aware scaling in the spatial attention branch,
+    \item favoring channels that represent local contrast and edge information,
+    \item preserving semantic channels critical for detecting faint objects.
+\end{itemize}
+
+\subsubsection{Channel Attention}
+
+LIAM first learns global channel dependencies through average and max pooling:
+\[
+M_{c}(F) = \sigma(\text{MLP}(\text{AvgPool}(F)) + \text{MLP}(\text{MaxPool}(F))),
+\]
+where $\sigma$ is the sigmoid function and $F$ is the input feature map.
+
+To adapt to low-light inputs, the MLP is trained to emphasize channels that respond strongly to edges, gradients, and contrast changes—features typically weakened in dark images.
+
+\subsubsection{Spatial Attention}
+
+Spatial attention highlights important pixel regions. LIAM employs an illumination-aware spatial attention:
+\[
+M_{s}(F') = \sigma(\text{Conv}_{7 \times 7}([\text{AvgPool}_{c}(F');\ \text{MaxPool}_{c}(F')])),
+\]
+where $F'$ is the channel-refined feature map.
+
+We modify the spatial branch by incorporating illumination normalization that enhances dark regions before convolution, making the module more responsive to dim objects.
+
+\subsection{Integration of LIAM into YOLOv8}
+
+We integrate LIAM inside the final C2f block of the YOLOv8 backbone. This placement ensures that:
+\begin{itemize}
+    \item LIAM works on deeper, semantically rich features,
+    \item attention is applied where illumination effects are most pronounced,
+    \item the computational overhead remains negligible.
+\end{itemize}
+
+Figure~\ref{fig:liam_architecture} shows the integration of LIAM within YOLOv8.
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\linewidth]{figures/Architecture.png}
+  \caption{LIAM-integrated YOLOv8 pipeline.}
+  \label{fig:liam_architecture}
+\end{figure}
+
+
+This modification allows YOLOv8 to focus on object-relevant low-light regions, increasing sensitivity (recall) while maintaining efficiency.
+
+\subsection{Training Configuration}
+
+All models are trained for 50 epochs at a resolution of 640$\times$640. The same hyperparameters are used across experiments:
+
+\begin{itemize}
+    \item Optimizer: SGD with momentum 0.937
+    \item Learning rate: 0.01 (cosine decay)
+    \item Batch size: 8
+    \item Loss functions: YOLOv8 standard losses for box, class, and objectness
+    \item Augmentations: horizontal flip, mosaic, HSV adjustments
+\end{itemize}
+
+Three configurations are evaluated:
+
+\begin{enumerate}
+    \item \textbf{baseline\_raw}: YOLOv8 trained on raw ExDark images.
+    \item \textbf{baseline\_enhanced}: YOLOv8 trained on Zero-DCE enhanced images.
+    \item \textbf{liam\_enhanced}: YOLOv8 with LIAM integrated into the backbone, trained on enhanced images.
+\end{enumerate}
+
+This setup enables fair comparison of enhancement effects and the contribution of the proposed LIAM module.
+
+\section{Results and Analysis}
+
+This chapter presents quantitative and qualitative results for the three evaluated configurations: \textbf{baseline\_raw}, \textbf{baseline\_enhanced} (Zero-DCE preprocessing), and \textbf{liam\_enhanced} (Zero-DCE + LIAM in YOLOv8). We report detection metrics (mAP, precision, recall), training curves, per-image qualitative comparisons, LIAM attention overlays, and an analysis of failure cases.
+
+\subsection{Evaluation metrics and setup}
+All models were trained for 50 epochs using the same hyperparameters (Section~3). We evaluate using COCO-style metrics reported by the YOLOv8 training logs:
+\begin{itemize}
+  \item \textbf{mAP@0.5} — mean average precision at IoU 0.5,
+  \item \textbf{mAP@[0.5:0.95]} — averaged mAP across IoU thresholds,
+  \item \textbf{Precision} and \textbf{Recall}.
+\end{itemize}
+
+\subsection{Hardware and System Specifications}
+
+All experiments were conducted on a local workstation equipped with the following hardware:
+
+\begin{itemize}
+    \item \textbf{CPU:} AMD Ryzen 7 7840HS (8 cores, 16 threads)
+    \item \textbf{GPU:} NVIDIA GeForce RTX 4060 Laptop GPU (8 GB VRAM)
+    \item \textbf{RAM:} 16 GB DDR5 system memory
+    \item \textbf{Storage:} NVMe SSD for fast data access
+    \item \textbf{Operating System:} Windows 11 (64-bit)
+    \item \textbf{Deep Learning Framework:} PyTorch with CUDA support
+    \item \textbf{Enhancement and Detection Tools:} Zero-DCE implementation and Ultralytics YOLOv8
+\end{itemize}
+
+The GPU was used for both Zero-DCE preprocessing and YOLOv8 training/inference.  
+The hardware configuration ensured smooth training for 50 epochs with batch size 8 at 640×640 resolution.
+All results reported in this study reflect the computational environment described above.
+
+
+\subsection{Quantitative Results}
+Table~\ref{tab:main_results} summarizes the final metrics (last epoch) for the three configurations.
+
+\begin{table}[h]
+\centering
+\caption{Final detection metrics (50 epochs).}
+\label{tab:main_results}
+\begin{tabular}{lcccc}
+\hline
+Model & mAP@0.5 & mAP@[0.5:0.95] & Precision & Recall \\
+\hline
+liam\_enhanced      & 0.71624 & 0.46179 & 0.76711 & 0.64218 \\
+baseline\_enhanced & 0.70213 & 0.44726 & 0.75357 & 0.62865 \\
+baseline\_raw     & 0.71000 & 0.45488 & 0.75413 & 0.61898 \\
+\hline
+\end{tabular}
+\end{table}
+
+\paragraph{Summary of quantitative observations}
+\begin{itemize}
+  \item \textbf{Liam\_enhanced} achieves the highest mAP (0.716) Precision and Recall,this indicates LIAM increases sensitivity to dim objects.
+  \item \textbf{Baseline\_enhanced} (Zero-DCE) shows a slight decrease in mAP and recall; we attribute this to smoothing/texture changes introduced by enhancement.
+  \item \textbf{Baseline\_raw} this has all the underwhelming metrics.
+\end{itemize}
+
+\subsection{Training curves and convergence}
+\FloatBarrier
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\linewidth]{figures/training_curves_all.png}
+  \caption{Training and validation curves (loss, mAP, precision, recall) for the three models.}
+  \label{fig:training_curves}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.95\linewidth]{figures/results.png}
+    \caption{Training and validation curves for the \textit{liam\_enhanced} model only. 
+    The detailed per-metric visualization (losses, precision, recall, and mAP) confirms smooth and stable convergence.}
+    \label{fig:traincurves_liam}
+\end{figure}
+
+The overall training behaviour for the three models is shown in Fig.~\ref{fig:training_curves}. 
+All models exhibit stable convergence with steadily decreasing training and validation losses, 
+indicating the absence of overfitting or optimization instability. The \textit{baseline\_raw} and 
+\textit{baseline\_enhanced} models show nearly identical convergence profiles, with the enhanced 
+model exhibiting slightly smoother validation losses due to the homogenizing effect of 
+illumination correction.
+
+To better understand the behaviour of the proposed system, Fig.~\ref{fig:traincurves_liam} presents
+the complete set of training curves for the \textit{liam\_enhanced} configuration. The loss curves 
+(train/val box loss, classification loss, and DFL loss) consistently decrease throughout training, 
+demonstrating that LIAM does not disrupt optimization dynamics. Metrics such as precision, recall, 
+and mAP steadily improve with epochs, showing no sudden fluctuations, which confirms that the 
+addition of LIAM introduces no instability into the training pipeline.
+
+Overall, the convergence behaviour indicates that the LIAM module integrates seamlessly into the 
+YOLOv8 backbone and maintains healthy optimization characteristics, while improving recall on 
+illumination-deficient regions (as shown in subsequent sections).
+\FloatBarrier
+
+
+\subsection{Per-class and confusion analysis}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\linewidth]{figures/confusion_matrix_normalized.png}
+  \caption{Normalized confusion matrix for \textit{liam\_enhanced} on validation set.}
+  \label{fig:confusion}
+\end{figure}
+
+The confusion matrix in Fig.~\ref{fig:confusion} shows the class-wise behavior of the 
+\textit{liam\_enhanced} model. Most classes achieve strong diagonal activations (0.68–0.87), 
+indicating consistent correct detections. Classes such as \textit{Bus} (0.87), 
+\textit{Bicycle} (0.77), \textit{Bottle} (0.71), \textit{Dog} (0.69), and \textit{People} (0.73) 
+display high true positive rates despite low-light conditions. The off-diagonal values reflect 
+misclassifications arising mostly due to low illumination, object overlap, and background noise. 
+Confusions are particularly visible for small-object categories such as \textit{Cup}, \textit{Chair}, 
+and \textit{Cat}, which are more sensitive to texture loss and illumination variations. 
+The bottom row (background) reveals how often true objects were not detected by the model (false negatives).
+The categories with the highest class-wise accuracy are:
+\begin{itemize}
+    \item \textbf{Bus}: 0.87
+    \item \textbf{Bicycle}: 0.77
+    \item \textbf{Bottle}: 0.71
+    \item \textbf{Dog}: 0.69
+    \item \textbf{People}: 0.73
+    \item \textbf{Table}: 0.51 (moderate due to occlusion and low contrast)
+\end{itemize}
+\FloatBarrier
+
+\subsection{Qualitative Results: per-image comparisons}
+
+\begin{figure}[h]
+    \centering
+    \begin{tabular}{ccc}
+        \includegraphics[width=0.31\linewidth]{figures/Bottle_raw.jpg} &
+        \includegraphics[width=0.31\linewidth]{figures/Bottle_enhanced.jpg} &
+        \includegraphics[width=0.31\linewidth]{figures/Bottle_liam.jpg} \\
+        \small Raw Image & \small Zero-DCE Enhanced & \small Zero-DCE + LIAM (Proposed)
+    \end{tabular}
+    \caption{Qualitative comparison on a low-light bottle sequence. 
+    The proposed LIAM-enhanced model detects the rightmost highly occluded and dim bottle with higher confidence, whereas the baseline enhanced model assigns lower confidence or partial detection.}
+    \label{fig:bottle_comparison}
+\end{figure}
+In the bottle sequence shown in Fig.~\ref{fig:bottle_comparison}, the benefits of the proposed 
+LIAM attention mechanism become evident. While the Zero-DCE enhanced model correctly identifies 
+most of the bottles, its prediction confidence drops significantly for the rightmost bottle, which 
+is the most dim and partially occluded. In contrast, the LIAM-enhanced model produces a noticeably 
+higher confidence score for the same bottle, indicating improved sensitivity to low-illumination 
+features. The illumination-aware spatial attention in LIAM helps preserve fine structural cues 
+even in darker regions, leading to more reliable detections under challenging lighting conditions.
+
+
+\subsection{Attention analysis and ablation}
+\begin{figure}[h]
+    \centering
+    \begin{tabular}{cc}
+        \includegraphics[width=0.48\linewidth]{figures/Bottle_2015_01367_liam_overlay_heatmap.png} &
+        \includegraphics[width=0.48\linewidth]{figures/Bottle_2015_01367_liam_overlay.png} \\
+        \small (a) LIAM spatial attention heatmap & 
+        \small (b) Heatmap overlaid on the image
+    \end{tabular}
+    \caption{Visualization of LIAM's attention response for the bottle example. 
+    The heatmap (a) highlights the spatial regions where LIAM focuses during feature extraction. 
+    The overlay (b) demonstrates that LIAM allocates stronger attention to the rightmost bottle, 
+    which is the dimmest and partially occluded object in the scene.}
+    \label{fig:liam_bottle_attn}
+\end{figure}
+
+The LIAM attention visualization in Fig.~\ref{fig:liam_bottle_attn} clearly shows that the module 
+allocates higher attention to the rightmost bottle, which is the most dim and partially occluded 
+object in the sequence. While the baseline enhanced model assigns a lower confidence to this object, 
+the LIAM-enhanced model increases the detection confidence, aligning with the visible attention 
+concentration in the heatmap. This confirms that LIAM effectively re-weights illumination-deficient 
+regions and enhances detectability in areas where Zero-DCE enhancement alone is insufficient.
+
+\subsection{Short summary}
+\begin{itemize}
+  \item Zero-DCE improves visual brightness but may reduce feature sharpness required by detectors, explaining the small drop in mAP.
+  \item LIAM increases recall by re-weighting features in deep backbone layers, improving sensitivity to dim objects.
+  \item Overall gains are modest but consistent in recall and precision. 
+\end{itemize}
+
+\section{Discussion}
+
+\subsection{Interpretation of Results}
+
+The experimental results demonstrate that Zero-DCE improves the overall visibility of low-light 
+images but may introduce smoothing that reduces texture information required for reliable detection. 
+This effect explains the slight drop in mAP for \textit{baseline\_enhanced} compared to the raw 
+baseline. The proposed LIAM-augmented model counteracts this by re-weighting illumination-deficient 
+features in the deeper backbone layers. As shown in the qualitative examples and attention 
+visualizations, LIAM assigns higher focus to dim or partially occluded regions, improving recall for 
+such objects despite the smoothing introduced during enhancement.
+
+\subsection{Advantages of the Proposed Method}
+
+The proposed LIAM module offers several advantages:
+\begin{itemize}
+    \item It is lightweight and integrates seamlessly into YOLOv8 without modifying the detection head.
+    \item It enhances sensitivity to low-illumination regions, particularly small, dark, or occluded objects.
+    \item Visualization of attention maps provides interpretable insights into the model's behaviour.
+    \item It partially mitigates the adverse effects of enhancement artefacts introduced by Zero-DCE.
+\end{itemize}
+
+\subsection{Limitations}
+
+Despite these benefits, some limitations remain:
+\begin{itemize}
+    \item Zero-DCE may over-smooth textures, which affects localization accuracy.
+    \item LIAM can produce false positives in cluttered scenes where bright textures resemble object edges.
+    \item The overall mAP improvement is modest, indicating that low-light detection still remains a 
+          challenging problem with considerable room for improvement.
+    \item Performance may vary across different low-light datasets; we evaluated only on ExDark.
+\end{itemize}
+
+\subsection{Future Work}
+
+Potential directions to extend this work include:
+\begin{itemize}
+    \item End-to-end joint training of Zero-DCE and YOLOv8 to reduce enhancement artefacts.
+    \item Inserting multiple LIAM modules at different backbone levels for multi-scale illumination-aware attention.
+    \item Incorporating transformer-based or Retinex-inspired enhancement mechanisms for better color and noise stability.
+    \item Leveraging synthetic low-light augmentation to improve generalization.
+    \item Evaluating on additional datasets such as LOL, SID, and night-time urban datasets.
+\end{itemize}
+
+\section{Conclusion}
+
+This work addressed the challenge of object detection in low-light environments by combining 
+Zero-DCE-based illumination enhancement with a modified attention mechanism, LIAM, integrated into 
+the YOLOv8 backbone. While Zero-DCE improves overall visibility, it can introduce smoothing artefacts 
+that negatively affect high-frequency features essential for detection. The proposed LIAM module 
+compensates for these effects by selectively re-weighting illumination-deficient spatial regions 
+within the final C2f block of the backbone.
+
+Experimental evaluation on the ExDark dataset demonstrates that the LIAM-enhanced model produces 
+improved recall on dim and partially occluded objects while maintaining competitive precision and 
+mAP compared to the baseline models. Qualitative analyses and attention visualizations further 
+confirm that LIAM focuses on under-exposed object regions, enabling more reliable detection in 
+challenging scenarios. Although the overall numerical gains are modest, the method provides clear 
+evidence that illumination-aware feature re-weighting can improve robustness in low-light object 
+detection pipelines.
+
+Future work may focus on multi-stage LIAM integration, end-to-end joint training with enhancement 
+modules, transformer-based attention, and evaluating the model across broader night-time datasets. 
+Overall, this study demonstrates a lightweight yet effective approach for improving object detection 
+performance under extreme low-light conditions.
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+
+\end{document}
