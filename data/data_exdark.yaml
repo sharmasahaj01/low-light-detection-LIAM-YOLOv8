@@ -1,0 +1,4 @@
+train: C:/Files/Semester_5/projects/CV/ExDark_enhanced/images/train
+val:   C:/Files/Semester_5/projects/CV/ExDark_enhanced/images/val
+nc: 12
+names: ['Bicycle', 'Boat', 'Bottle', 'Bus', 'Car', 'Cat', 'Chair', 'Cup', 'Dog', 'Motorbike', 'People', 'Table']
